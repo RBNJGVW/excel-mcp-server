@@ -22,4 +22,4 @@ COPY src/ ./src/
 EXPOSE 8017
 
 # Arranca el servidor en SSE por defecto
-CMD ["python", "-c", "from excel_mcp_server.server import run_sse; run_sse()"]
+CMD ["python", "-c", "from excel_mcp.server import run_sse; run_sse()"]
