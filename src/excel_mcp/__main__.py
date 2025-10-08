@@ -1,8 +1,12 @@
 import typer
+from dotenv import load_dotenv
 
 from .server import run_sse, run_stdio, run_streamable_http
 
+load_dotenv(override=True)
+
 app = typer.Typer(help="Excel MCP Server")
+
 
 @app.command()
 def sse():
@@ -14,9 +18,11 @@ def sse():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         print("Service stopped.")
+
 
 @app.command()
 def streamable_http():
@@ -28,9 +34,11 @@ def streamable_http():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         print("Service stopped.")
+
 
 @app.command()
 def stdio():
@@ -42,9 +50,11 @@ def stdio():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         print("Service stopped.")
 
+
 if __name__ == "__main__":
-    app() 
+    sse()
