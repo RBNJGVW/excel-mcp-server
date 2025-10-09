@@ -80,8 +80,20 @@ mcp = FastMCP(
 
 
 def _logical_name(filepath: str) -> str:
-    """Nombre lógico para el backend (basename si te pasan un path absoluto)."""
-    return filepath if not os.path.isabs(filepath) else os.path.basename(filepath)
+    """
+    Devuelve un nombre lógico para el backend.
+    - Si te pasan un path absoluto, usamos solo el basename (misma semántica que antes).
+    - Normalizamos separadores y quitamos prefijos redundantes cuando el backend es Blob.
+    """
+    n = (filepath or "").strip()
+    if os.path.isabs(n):
+        n = os.path.basename(n)
+    n = n.replace("\\", "/").lstrip("/")
+
+    _ensure_storage()  # asegura STORAGE inicializado
+    if hasattr(STORAGE, "normalize_name"):
+        n = STORAGE.normalize_name(n)
+    return n
 
 
 def _ensure_storage():
@@ -707,6 +719,16 @@ def delete_sheet_columns(
     except Exception as e:
         logger.error(f"Error deleting columns: {e}")
         raise
+
+
+@mcp.tool()
+def list_backend_files(pattern: Optional[str] = "*.xlsx") -> str:
+    try:
+        _ensure_storage()
+        names = STORAGE.list_names(pattern)
+        return "\n".join(names) if names else "(vacío)"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 def run_sse():

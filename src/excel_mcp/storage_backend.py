@@ -1,4 +1,5 @@
 import contextlib
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ except Exception:
     BlobServiceClient = None
     ContentSettings = None
 
+log = logging.getLogger("excel-mcp.storage")
 
 AZBLOB_SCHEME = "azblob://"
 
@@ -188,32 +190,47 @@ class StorageBackend:
     @contextlib.contextmanager
     def local_write(self, name: str) -> Iterator[str]:
         """
-        Yields una ruta local para ESCRIBIR 'name'.
-        - Local FS: ruta definitiva (dentro de EXCEL_FILES_PATH).
-        - Blob: ruta temporal; al salir del context se sube automáticamente.
+        Cede una ruta local para ESCRIBIR `name`.
+        - Si el blob existe: **lo descarga primero** para editar sobre él.
+        - Al salir: sube (overwrite=True).
         """
         if not self._is_blob:
             dest = os.path.join(self._local_base, name)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             yield dest
-            # nada que hacer al salir
             return
 
         tmpdir = tempfile.mkdtemp(prefix="excel-mcp-w-", dir=self._tmp_root)
         local_path = os.path.join(tmpdir, os.path.basename(name))
         try:
-            yield local_path
-            # Subir a Blob al cerrar
             blob_name = _join_blob(self._prefix, name)
             bc = self._container_client.get_blob_client(blob_name)
+
+            # PRE-DESCARGA SI EXISTE
+            try:
+                self._container_client.get_blob_client(blob_name).get_blob_properties()
+                with open(local_path, "wb") as f:
+                    bc.download_blob(max_concurrency=2).readinto(f)
+                log.debug(f"[blob] predescargado: {blob_name} -> {local_path}")
+            except Exception:
+                # No existe todavía: se creará nuevo al guardar
+                log.debug(f"[blob] no existe aún: {blob_name} (se creará nuevo)")
+
+            # Ceder ruta local al caller para que escriba
+            yield local_path
+
+            # SUBIDA AL SALIR
             content_settings = None
-            if ContentSettings:
-                # content-type de XLSX
+            if ContentSettings and (
+                name.lower().endswith(".xlsx") or name.lower().endswith(".xlsm")
+            ):
                 content_settings = ContentSettings(
                     content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with open(local_path, "rb") as f:
                 bc.upload_blob(f, overwrite=True, content_settings=content_settings)
+            log.debug(f"[blob] subido: {local_path} -> {blob_name}")
+
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -229,6 +246,24 @@ class StorageBackend:
             self._container_client.delete_blob(blob_name)
         except Exception:
             pass
+
+    def normalize_name(self, name: str) -> str:
+        """
+        Normaliza 'name' para que sea relativo al prefijo del backend.
+        Acepta:
+          - "prueba.xlsx"
+          - "subdir/prueba.xlsx"
+          - "<prefix>/prueba.xlsx"  (si el EXCEL_FILES_PATH ya tiene <prefix>)
+        y elimina el prefijo redundante para evitar 'prefix/prefix/...'.
+        """
+        n = (name or "").strip().replace("\\", "/").lstrip("/")
+        if self._is_blob and self._prefix:
+            pref = self._prefix.rstrip("/")
+            if n == pref:
+                return os.path.basename(n)
+            if n.startswith(pref + "/"):
+                n = n[len(pref) + 1 :]
+        return n
 
 
 def get_storage(base_path: Optional[str]) -> StorageBackend:
