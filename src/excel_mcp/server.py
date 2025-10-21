@@ -96,10 +96,14 @@ def _logical_name(filepath: str) -> str:
     return n
 
 
-def _ensure_storage():
+def _ensure_storage(robot_number: Optional[str] = None):
     global STORAGE, EXCEL_FILES_PATH
     if STORAGE is None:
-        STORAGE = get_storage(EXCEL_FILES_PATH or "./excel_files")
+        if robot_number is None:
+            STORAGE = get_storage(EXCEL_FILES_PATH or "./excel_files")
+        else:
+            robot_file_path = EXCEL_FILES_PATH + robot_number + "/"
+            STORAGE = get_storage(robot_file_path or "./excel_files")
 
 
 def _read_call(filepath: str, func, *args, **kwargs):
@@ -144,6 +148,7 @@ def get_excel_path(filename: str) -> str:
 
 @mcp.tool()
 def apply_formula(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     cell: str,
@@ -154,9 +159,10 @@ def apply_formula(
     Excel formula will write to cell with verification.
     """
     try:
+        robot_filepath = robot_number + "/" + filepath
         # First validate the formula
         validation = _read_call(
-            filepath, validate_formula_impl, sheet_name, cell, formula
+            robot_filepath, validate_formula_impl, sheet_name, cell, formula
         )
         if isinstance(validation, dict) and "error" in validation:
             return f"Error: {validation['error']}"
@@ -164,7 +170,9 @@ def apply_formula(
         # If valid, apply the formula
         from excel_mcp.calculations import apply_formula as apply_formula_impl
 
-        result = _write_call(filepath, apply_formula_impl, sheet_name, cell, formula)
+        result = _write_call(
+            robot_filepath, apply_formula_impl, sheet_name, cell, formula
+        )
         return result["message"]
     except (ValidationError, CalculationError) as e:
         return f"Error: {str(e)}"
@@ -175,6 +183,7 @@ def apply_formula(
 
 @mcp.tool()
 def validate_formula_syntax(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     cell: str,
@@ -182,8 +191,10 @@ def validate_formula_syntax(
 ) -> str:
     """Validate Excel formula syntax without applying it."""
     try:
-
-        result = _read_call(filepath, validate_formula_impl, sheet_name, cell, formula)
+        robot_filepath = robot_number + "/" + filepath
+        result = _read_call(
+            robot_filepath, validate_formula_impl, sheet_name, cell, formula
+        )
         return result["message"]
     except (ValidationError, CalculationError) as e:
         return f"Error: {str(e)}"
@@ -194,6 +205,7 @@ def validate_formula_syntax(
 
 @mcp.tool()
 def format_range(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     start_cell: str,
@@ -218,9 +230,10 @@ def format_range(
 
         from excel_mcp.formatting import format_range as format_range_func
 
+        robot_filepath = robot_number + "/" + filepath
         # Convert None values to appropriate defaults for the underlying function
         _write_call(
-            filepath,
+            robot_filepath,
             format_range_func,
             sheet_name=sheet_name,
             start_cell=start_cell,
@@ -250,6 +263,7 @@ def format_range(
 
 @mcp.tool()
 def read_data_from_excel(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     start_cell: str = "A1",
@@ -274,8 +288,13 @@ def read_data_from_excel(
 
         from excel_mcp.data import read_excel_range_with_metadata
 
+        robot_filepath = robot_number + "/" + filepath
         result = _read_call(
-            filepath, read_excel_range_with_metadata, sheet_name, start_cell, end_cell
+            robot_filepath,
+            read_excel_range_with_metadata,
+            sheet_name,
+            start_cell,
+            end_cell,
         )
         if not result or not result.get("cells"):
             return "No data found in specified range"
@@ -292,6 +311,7 @@ def read_data_from_excel(
 
 @mcp.tool()
 def write_data_to_excel(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     data: List[List],
@@ -309,8 +329,8 @@ def write_data_to_excel(
 
     """
     try:
-
-        result = _write_call(filepath, write_data, sheet_name, data, start_cell)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, write_data, sheet_name, data, start_cell)
         return result["message"]
     except (ValidationError, DataError) as e:
         return f"Error: {str(e)}"
@@ -320,13 +340,14 @@ def write_data_to_excel(
 
 
 @mcp.tool()
-def create_workbook(filepath: str) -> str:
+def create_workbook(robot_number: str, filepath: str) -> str:
     """Create new Excel workbook."""
     try:
 
         from excel_mcp.workbook import create_workbook as create_workbook_impl
 
-        _write_call(filepath, create_workbook_impl)
+        robot_filepath = robot_number + "/" + filepath
+        _write_call(robot_filepath, create_workbook_impl)
         return f"Created workbook at {filepath}"
     except WorkbookError as e:
         return f"Error: {str(e)}"
@@ -336,13 +357,14 @@ def create_workbook(filepath: str) -> str:
 
 
 @mcp.tool()
-def create_worksheet(filepath: str, sheet_name: str) -> str:
+def create_worksheet(robot_number: str, filepath: str, sheet_name: str) -> str:
     """Create new worksheet in workbook."""
     try:
 
         from excel_mcp.workbook import create_sheet as create_worksheet_impl
 
-        result = _write_call(filepath, create_worksheet_impl, sheet_name)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, create_worksheet_impl, sheet_name)
         return result["message"]
     except (ValidationError, WorkbookError) as e:
         return f"Error: {str(e)}"
@@ -353,6 +375,7 @@ def create_worksheet(filepath: str, sheet_name: str) -> str:
 
 @mcp.tool()
 def create_chart(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     data_range: str,
@@ -364,9 +387,9 @@ def create_chart(
 ) -> str:
     """Create chart in worksheet."""
     try:
-
+        robot_filepath = robot_number + "/" + filepath
         result = _write_call(
-            filepath,
+            robot_filepath,
             create_chart_impl,
             sheet_name=sheet_name,
             data_range=data_range,
@@ -386,6 +409,7 @@ def create_chart(
 
 @mcp.tool()
 def create_pivot_table(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     data_range: str,
@@ -396,9 +420,9 @@ def create_pivot_table(
 ) -> str:
     """Create pivot table in worksheet."""
     try:
-
+        robot_filepath = robot_number + "/" + filepath
         result = _write_call(
-            filepath,
+            robot_filepath,
             create_pivot_table_impl,
             sheet_name,
             data_range,
@@ -417,6 +441,7 @@ def create_pivot_table(
 
 @mcp.tool()
 def create_table(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     data_range: str,
@@ -425,9 +450,9 @@ def create_table(
 ) -> str:
     """Creates a native Excel table from a specified range of data."""
     try:
-
+        robot_filepath = robot_number + "/" + filepath
         result = _write_call(
-            filepath,
+            robot_filepath,
             create_table_impl,
             sheet_name=sheet_name,
             data_range=data_range,
@@ -443,11 +468,13 @@ def create_table(
 
 
 @mcp.tool()
-def copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str:
+def copy_worksheet(
+    robot_number: str, filepath: str, source_sheet: str, target_sheet: str
+) -> str:
     """Copy worksheet within workbook."""
     try:
-
-        result = _write_call(filepath, copy_sheet, source_sheet, target_sheet)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, copy_sheet, source_sheet, target_sheet)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -457,11 +484,11 @@ def copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str:
 
 
 @mcp.tool()
-def delete_worksheet(filepath: str, sheet_name: str) -> str:
+def delete_worksheet(robot_number: str, filepath: str, sheet_name: str) -> str:
     """Delete worksheet from workbook."""
     try:
-
-        result = _write_call(filepath, delete_sheet, sheet_name)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, delete_sheet, sheet_name)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -471,11 +498,13 @@ def delete_worksheet(filepath: str, sheet_name: str) -> str:
 
 
 @mcp.tool()
-def rename_worksheet(filepath: str, old_name: str, new_name: str) -> str:
+def rename_worksheet(
+    robot_number: str, filepath: str, old_name: str, new_name: str
+) -> str:
     """Rename worksheet in workbook."""
     try:
-
-        result = _write_call(filepath, rename_sheet, old_name, new_name)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, rename_sheet, old_name, new_name)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -485,10 +514,15 @@ def rename_worksheet(filepath: str, old_name: str, new_name: str) -> str:
 
 
 @mcp.tool()
-def get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str:
+def get_workbook_metadata(
+    robot_number: str, filepath: str, include_ranges: bool = False
+) -> str:
     """Get metadata about workbook including sheets, ranges, etc."""
     try:
-        result = _read_call(filepath, get_workbook_info, include_ranges=include_ranges)
+        robot_filepath = robot_number + "/" + filepath
+        result = _read_call(
+            robot_filepath, get_workbook_info, include_ranges=include_ranges
+        )
         return str(result)
     except WorkbookError as e:
         return f"Error: {str(e)}"
@@ -498,11 +532,15 @@ def get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str:
 
 
 @mcp.tool()
-def merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> str:
+def merge_cells(
+    robot_number: str, filepath: str, sheet_name: str, start_cell: str, end_cell: str
+) -> str:
     """Merge a range of cells."""
     try:
-
-        result = _write_call(filepath, merge_range, sheet_name, start_cell, end_cell)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(
+            robot_filepath, merge_range, sheet_name, start_cell, end_cell
+        )
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -513,12 +551,14 @@ def merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) 
 
 @mcp.tool()
 def unmerge_cells(
-    filepath: str, sheet_name: str, start_cell: str, end_cell: str
+    robot_number: str, filepath: str, sheet_name: str, start_cell: str, end_cell: str
 ) -> str:
     """Unmerge a range of cells."""
     try:
-
-        result = _write_call(filepath, unmerge_range, sheet_name, start_cell, end_cell)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(
+            robot_filepath, unmerge_range, sheet_name, start_cell, end_cell
+        )
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -528,10 +568,11 @@ def unmerge_cells(
 
 
 @mcp.tool()
-def get_merged_cells(filepath: str, sheet_name: str) -> str:
+def get_merged_cells(robot_number: str, filepath: str, sheet_name: str) -> str:
     """Get merged cells in a worksheet."""
     try:
-        return str(_read_call(filepath, get_merged_ranges, sheet_name))
+        robot_filepath = robot_number + "/" + filepath
+        return str(_read_call(robot_filepath, get_merged_ranges, sheet_name))
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
     except Exception as e:
@@ -541,6 +582,7 @@ def get_merged_cells(filepath: str, sheet_name: str) -> str:
 
 @mcp.tool()
 def copy_range(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     source_start: str,
@@ -553,8 +595,9 @@ def copy_range(
 
         from excel_mcp.sheet import copy_range_operation
 
+        robot_filepath = robot_number + "/" + filepath
         result = _write_call(
-            filepath,
+            robot_filepath,
             copy_range_operation,
             sheet_name,
             source_start,
@@ -572,6 +615,7 @@ def copy_range(
 
 @mcp.tool()
 def delete_range(
+    robot_number: str,
     filepath: str,
     sheet_name: str,
     start_cell: str,
@@ -583,8 +627,9 @@ def delete_range(
 
         from excel_mcp.sheet import delete_range_operation
 
+        robot_filepath = robot_number + "/" + filepath
         result = _write_call(
-            filepath,
+            robot_filepath,
             delete_range_operation,
             sheet_name,
             start_cell,
@@ -601,12 +646,17 @@ def delete_range(
 
 @mcp.tool()
 def validate_excel_range(
-    filepath: str, sheet_name: str, start_cell: str, end_cell: Optional[str] = None
+    robot_number: str,
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: Optional[str] = None,
 ) -> str:
     """Validate if a range exists and is properly formatted."""
     try:
+        robot_filepath = robot_number + "/" + filepath
         range_str = start_cell if not end_cell else f"{start_cell}:{end_cell}"
-        result = _read_call(filepath, validate_range_impl, sheet_name, range_str)
+        result = _read_call(robot_filepath, validate_range_impl, sheet_name, range_str)
         return result["message"]
     except ValidationError as e:
         return f"Error: {str(e)}"
@@ -616,7 +666,7 @@ def validate_excel_range(
 
 
 @mcp.tool()
-def get_data_validation_info(filepath: str, sheet_name: str) -> str:
+def get_data_validation_info(robot_number: str, filepath: str, sheet_name: str) -> str:
     """
     Get all data validation rules in a worksheet.
 
@@ -646,7 +696,8 @@ def get_data_validation_info(filepath: str, sheet_name: str) -> str:
             wb.close()
             return {"sheet_name": _sheet, "validation_rules": validations}
 
-        result = _read_call(filepath, _fn, sheet_name)
+        robot_filepath = robot_number + "/" + filepath
+        result = _read_call(robot_filepath, _fn, sheet_name)
         if "error" in result:
             return f"Error: {result['error']}"
         import json
@@ -660,11 +711,13 @@ def get_data_validation_info(filepath: str, sheet_name: str) -> str:
 
 
 @mcp.tool()
-def insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) -> str:
+def insert_rows(
+    robot_number: str, filepath: str, sheet_name: str, start_row: int, count: int = 1
+) -> str:
     """Insert one or more rows starting at the specified row."""
     try:
-
-        result = _write_call(filepath, insert_row, sheet_name, start_row, count)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, insert_row, sheet_name, start_row, count)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -675,12 +728,12 @@ def insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) 
 
 @mcp.tool()
 def insert_columns(
-    filepath: str, sheet_name: str, start_col: int, count: int = 1
+    robot_number: str, filepath: str, sheet_name: str, start_col: int, count: int = 1
 ) -> str:
     """Insert one or more columns starting at the specified column."""
     try:
-
-        result = _write_call(filepath, insert_cols, sheet_name, start_col, count)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, insert_cols, sheet_name, start_col, count)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -691,12 +744,12 @@ def insert_columns(
 
 @mcp.tool()
 def delete_sheet_rows(
-    filepath: str, sheet_name: str, start_row: int, count: int = 1
+    robot_number: str, filepath: str, sheet_name: str, start_row: int, count: int = 1
 ) -> str:
     """Delete one or more rows starting at the specified row."""
     try:
-
-        result = _write_call(filepath, delete_rows, sheet_name, start_row, count)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, delete_rows, sheet_name, start_row, count)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -707,12 +760,12 @@ def delete_sheet_rows(
 
 @mcp.tool()
 def delete_sheet_columns(
-    filepath: str, sheet_name: str, start_col: int, count: int = 1
+    robot_number: str, filepath: str, sheet_name: str, start_col: int, count: int = 1
 ) -> str:
     """Delete one or more columns starting at the specified column."""
     try:
-
-        result = _write_call(filepath, delete_cols, sheet_name, start_col, count)
+        robot_filepath = robot_number + "/" + filepath
+        result = _write_call(robot_filepath, delete_cols, sheet_name, start_col, count)
         return result["message"]
     except (ValidationError, SheetError) as e:
         return f"Error: {str(e)}"
@@ -722,7 +775,7 @@ def delete_sheet_columns(
 
 
 @mcp.tool()
-def list_backend_files(pattern: Optional[str] = "*.xlsx") -> str:
+def list_backend_files(robot_number: str, pattern: Optional[str] = "*.xlsx") -> str:
     try:
         _ensure_storage()
         names = STORAGE.list_names(pattern)
