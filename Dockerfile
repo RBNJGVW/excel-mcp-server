@@ -26,4 +26,4 @@ EXPOSE 8017
 ENV FASTMCP_HOST=0.0.0.0 \
     FASTMCP_PORT=8017
 
-CMD ["python", "-u", "run_sse.py"]
+CMD ["python", "-u", "run_streamable_http.py"]

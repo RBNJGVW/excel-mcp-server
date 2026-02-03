@@ -8,10 +8,13 @@ from dataclasses import dataclass
 from typing import Iterator, List, Optional
 
 try:
+    from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
     from azure.storage.blob import BlobServiceClient, ContentSettings
-except Exception:
+except ImportError:
     BlobServiceClient = None
     ContentSettings = None
+    DefaultAzureCredential = None
+    InteractiveBrowserCredential = None
 
 log = logging.getLogger("excel-mcp.storage")
 
@@ -27,13 +30,6 @@ def _join_blob(prefix: str, name: str) -> str:
     prefix = _norm_prefix(prefix)
     name = name.lstrip("/")
     return f"{prefix}/{name}" if prefix else name
-
-
-@dataclass
-class _AzCreds:
-    account_url: str
-    credential: object
-    source: str
 
 
 class StorageBackend:
@@ -60,10 +56,26 @@ class StorageBackend:
             self._parse_blob_url()
             self._bsc = self._build_blob_service_client()
             self._container_client = self._bsc.get_container_client(self._container)
+            # Forzar conexión para abrir el navegador
+            self._warm_up_connection()
 
     # ----------------------------
     # Inicialización AZ Blob
     # ----------------------------
+
+    def _warm_up_connection(self):
+        """Intenta contactar con Azure para forzar el popup de login al inicio."""
+        try:
+            print("🔄 Iniciando conexión con Azure Blob Storage...")
+            # .exists() hace una llamada de red ligera (HEAD)
+            if self._container_client.exists():
+                print(f"✅ Conectado exitosamente al contenedor: {self._container}")
+            else:
+                print(f"⚠️ El contenedor '{self._container}' no parece existir.")
+        except Exception as e:
+            # Aquí saltará el error si cancelas el login o falla la red
+            print(f"❌ Error conectando a Azure: {e}")
+            raise e
 
     def _parse_blob_url(self) -> None:
         """
@@ -80,39 +92,45 @@ class StorageBackend:
 
     def _build_blob_service_client(self):
         """
-        Crea un BlobServiceClient a partir de:
-        - AZURE_STORAGE_CONNECTION_STRING
-        - o (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY)
-        - o (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_SAS_TOKEN)
-        - opcional: AZURE_STORAGE_ACCOUNT_URL (si usas dominio privado)
+        Crea un BlobServiceClient con la siguiente prioridad:
+        1. InteractiveBrowserCredential (SOLO LOCAL si se activa explícitamente)
+        2. DefaultAzureCredential (Producción/Managed Identity)
         """
-        if BlobServiceClient is None:
+        if BlobServiceClient is None or DefaultAzureCredential is None:
             raise RuntimeError(
-                "azure-storage-blob no está instalado. Añade 'azure-storage-blob' a requirements.txt"
+                "Librerías de Azure faltantes. Instala 'azure-storage-blob' y 'azure-identity'."
             )
 
-        conn = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-        if conn:
-            return BlobServiceClient.from_connection_string(conn)
+        # Configuración de URL
+        account_name = os.environ.get("AZURE_STORAGE_ACCOUNT")
+        account_url = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
+        if not account_url and account_name:
+            account_url = f"https://{account_name}.blob.core.windows.net"
 
-        account = os.environ.get("AZURE_STORAGE_ACCOUNT")
-        account_url = os.environ.get("AZURE_STORAGE_ACCOUNT_URL") or (
-            f"https://{account}.blob.core.windows.net" if account else None
+        if not account_url:
+            raise ValueError("Faltan credenciales. Define AZURE_STORAGE_ACCOUNT.")
+
+        # 3. Interactive Browser (SOLO LOCAL)
+        # IMPORTANTE: Activamos esto solo si una variable de entorno lo pide.
+        # De lo contrario, romperá el servidor en producción al intentar abrir un navegador.
+        if os.environ.get("AZURE_USE_INTERACTIVE_AUTH", "").lower() == "true":
+            tenant_id = os.environ.get("AZURE_TENANT_ID")
+            log.info(
+                f"[ALERTA] MODO INTERACTIVO ACTIVADO. Usando InteractiveBrowserCredential (Tenant: {tenant_id}). "
+                "Esto requiere interacción humana y navegador."
+            )
+            # Si tenant_id es None, Azure usará el tenant por defecto del usuario
+            credential = InteractiveBrowserCredential(tenant_id=tenant_id)
+            return BlobServiceClient(account_url=account_url, credential=credential)
+
+        # 4. Managed Identity / DefaultAzureCredential (Producción)
+        log.info("Usando DefaultAzureCredential (Managed Identity) para Azure Blob.")
+        managed_identity_client_id = os.environ.get("AZURE_CLIENT_ID")
+        credential = DefaultAzureCredential(
+            managed_identity_client_id=managed_identity_client_id
         )
-        key = os.environ.get("AZURE_STORAGE_KEY")
-        sas = os.environ.get("AZURE_STORAGE_SAS_TOKEN")
 
-        if account_url and key:
-            return BlobServiceClient(account_url=account_url, credential=key)
-        if account_url and sas:
-            return BlobServiceClient(account_url=account_url, credential=sas)
-
-        raise RuntimeError(
-            "No hay credenciales de Azure Blob. Configura "
-            "AZURE_STORAGE_CONNECTION_STRING o "
-            "(AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY) o "
-            "(AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_SAS_TOKEN)."
-        )
+        return BlobServiceClient(account_url=account_url, credential=credential)
 
     # ----------------------------
     # API pública
@@ -123,9 +141,6 @@ class StorageBackend:
         return self._is_blob
 
     def list_names(self, pattern: Optional[str] = None) -> List[str]:
-        """
-        Lista nombres lógicos (no rutas locales). pattern soporta comodín '*.xlsx'.
-        """
         if not self._is_blob:
             names = []
             base = self._local_base
@@ -137,10 +152,10 @@ class StorageBackend:
                     names.append(rel.replace("\\", "/"))
         else:
             names = []
+
             for blob in self._container_client.list_blobs(
                 name_starts_with=self._prefix or None
             ):
-                # Convertimos a nombre lógico relativo al prefix
                 name = blob.name
                 if self._prefix and name.startswith(self._prefix + "/"):
                     name = name[len(self._prefix) + 1 :]
@@ -149,6 +164,7 @@ class StorageBackend:
                 names.append(name)
 
         if pattern:
+            # Escapamos puntos y convertimos glob simple a regex
             rx = re.compile("^" + pattern.replace(".", r"\.").replace("*", ".*") + "$")
             names = [n for n in names if rx.match(n)]
         return names
@@ -156,18 +172,15 @@ class StorageBackend:
     def exists(self, name: str) -> bool:
         if not self._is_blob:
             return os.path.exists(os.path.join(self._local_base, name))
+
         blob_name = _join_blob(self._prefix, name)
         try:
-            self._container_client.get_blob_client(blob_name).get_blob_properties()
-            return True
+            return self._container_client.get_blob_client(blob_name).exists()
         except Exception:
             return False
 
     @contextlib.contextmanager
     def local_read(self, name: str) -> Iterator[str]:
-        """
-        Yields una ruta local existente para leer 'name'.
-        """
         if not self._is_blob:
             path = os.path.join(self._local_base, name)
             if not os.path.exists(path):
@@ -175,25 +188,20 @@ class StorageBackend:
             yield path
             return
 
-        # Blob → descargar a tmp
         tmpdir = tempfile.mkdtemp(prefix="excel-mcp-r-", dir=self._tmp_root)
         local_path = os.path.join(tmpdir, os.path.basename(name))
         blob_name = _join_blob(self._prefix, name)
         bc = self._container_client.get_blob_client(blob_name)
-        with open(local_path, "wb") as f:
-            bc.download_blob(max_concurrency=2).readinto(f)
+
         try:
+            with open(local_path, "wb") as f:
+                bc.download_blob(max_concurrency=2).readinto(f)
             yield local_path
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     @contextlib.contextmanager
     def local_write(self, name: str) -> Iterator[str]:
-        """
-        Cede una ruta local para ESCRIBIR `name`.
-        - Si el blob existe: **lo descarga primero** para editar sobre él.
-        - Al salir: sube (overwrite=True).
-        """
         if not self._is_blob:
             dest = os.path.join(self._local_base, name)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -202,24 +210,22 @@ class StorageBackend:
 
         tmpdir = tempfile.mkdtemp(prefix="excel-mcp-w-", dir=self._tmp_root)
         local_path = os.path.join(tmpdir, os.path.basename(name))
+
         try:
             blob_name = _join_blob(self._prefix, name)
             bc = self._container_client.get_blob_client(blob_name)
 
-            # PRE-DESCARGA SI EXISTE
-            try:
-                self._container_client.get_blob_client(blob_name).get_blob_properties()
+            # Optimización: comprobar existencia antes de descargar
+            if bc.exists():
                 with open(local_path, "wb") as f:
                     bc.download_blob(max_concurrency=2).readinto(f)
                 log.debug(f"[blob] predescargado: {blob_name} -> {local_path}")
-            except Exception:
-                # No existe todavía: se creará nuevo al guardar
+            else:
                 log.debug(f"[blob] no existe aún: {blob_name} (se creará nuevo)")
 
-            # Ceder ruta local al caller para que escriba
             yield local_path
 
-            # SUBIDA AL SALIR
+            # SUBIDA
             content_settings = None
             if ContentSettings and (
                 name.lower().endswith(".xlsx") or name.lower().endswith(".xlsm")
@@ -227,6 +233,7 @@ class StorageBackend:
                 content_settings = ContentSettings(
                     content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
             with open(local_path, "rb") as f:
                 bc.upload_blob(f, overwrite=True, content_settings=content_settings)
             log.debug(f"[blob] subido: {local_path} -> {blob_name}")
@@ -241,21 +248,11 @@ class StorageBackend:
             except FileNotFoundError:
                 pass
             return
+
         blob_name = _join_blob(self._prefix, name)
-        try:
-            self._container_client.delete_blob(blob_name)
-        except Exception:
-            pass
+        self._container_client.get_blob_client(blob_name).delete_blob()
 
     def normalize_name(self, name: str) -> str:
-        """
-        Normaliza 'name' para que sea relativo al prefijo del backend.
-        Acepta:
-          - "prueba.xlsx"
-          - "subdir/prueba.xlsx"
-          - "<prefix>/prueba.xlsx"  (si el EXCEL_FILES_PATH ya tiene <prefix>)
-        y elimina el prefijo redundante para evitar 'prefix/prefix/...'.
-        """
         n = (name or "").strip().replace("\\", "/").lstrip("/")
         if self._is_blob and self._prefix:
             pref = self._prefix.rstrip("/")
